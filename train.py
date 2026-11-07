@@ -10,7 +10,8 @@ schedule, new delays, absences and progress noise, while a scenario fixes its ho
 work, priority) and its workforce.
 
 At 20% of training the red flags of health.py are checked; a red flag stops the run with exit code 3
-(run_training.sh then starts asha.py). Writes runs/seedK/: progress.csv and TensorBoard events,
+(run_training.sh then starts asha.py). A run that trains to the end but fails the final health check
+exits with code 4; its model is kept for diagnosis (asha.py trials, run with --no-stop, exit with 0). Writes runs/seedK/: progress.csv and TensorBoard events,
 probe.csv, checkpoints every 10%, final_model.zip, vecnormalize.pkl, scenario_counts.csv, health.json.
 """
 import argparse
@@ -91,6 +92,7 @@ def main():
     ap.add_argument("--run", help="output folder (default runs/seedK)")
     ap.add_argument("--no-stop", action="store_true", help="record red flags but train to the end (asha.py trials)")
     args = ap.parse_args()
+    C.check_calibration()
     import torch
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import CheckpointCallback
@@ -138,6 +140,8 @@ def main():
     report["per_env_count_spread"] = int(max(np.ptp(c[i::args.n_envs]) for i, c in enumerate(per_env)))
     (run / "health.json").write_text(json.dumps(report, indent=2) + "\n")
     print(f"seed {args.seed}: healthy={report['healthy']}", flush=True)
+    if not report["healthy"] and not args.no_stop:
+        sys.exit(4)
 
 
 if __name__ == "__main__":

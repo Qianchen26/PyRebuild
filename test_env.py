@@ -4,6 +4,7 @@ Each block tests one property of env.py: the holding-cost identity, eligibility 
 crews that never shrink, the absence model, the ranking, that no information leaks, the random
 schedules, the delay distribution, and the split between house and episode random numbers.
 """
+import copy
 import hashlib
 
 import numpy as np
@@ -89,6 +90,23 @@ for weights, key in [([-1, 0, 0, 0], lambda e: e.work), ([1, 0, 0, 0], lambda e:
     env.step(np.array(weights, dtype=np.float32))
     started, waiting = env.start == 0, (env.arrive == 0) & (env.start < 0)
     assert key(env)[started].max() <= key(env)[waiting].min(), weights
+
+# contested_attributes(): changing only the weights it does not flag never changes the dispatch,
+# and changing a flagged weight sometimes does
+env = HouseRecoveryEnv(SMALL)
+env.reset(seed=9)
+rng, flagged, changed, terminated = np.random.default_rng(0), 0, 0, False
+while not terminated:
+    mask, w = env.contested_attributes(), rng.uniform(-1, 1, 4)
+    a, b, c = copy.deepcopy(env), copy.deepcopy(env), copy.deepcopy(env)
+    a._dispatch(w)
+    b._dispatch(np.where(mask, w, rng.uniform(-1, 1, 4)))
+    c._dispatch(np.where(mask, -w, w))
+    assert (a.crew == b.crew).all() and (a.start == b.start).all(), env.day
+    flagged += mask.any()
+    changed += not (a.start == c.start).all()
+    terminated = env.step(w)[2]
+assert flagged and changed, (flagged, changed)
 
 # No information leak: extra houses in a later batch leave every earlier observation unchanged
 def add_late(env, m, day):

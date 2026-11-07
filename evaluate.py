@@ -4,12 +4,18 @@ Usage: OMP_NUM_THREADS=1 python evaluate.py [--workers 14]   (12 policies x 7 re
 
 Policies: the fixed rules SJF, LJF, FIFO, PriorityOnly, the FCR (results/fcr_search), the historical rule
 used for calibration, Random (new U(-1, 1) weights every day), and the five trained PPO models.
-Writes results/episodes.csv with one row per policy, region and seed: the episode metrics, the
-episode-mean weights (w_work ... w_damage) used by the weight figure, and a hash of the initial houses,
-which must be the same for every policy in a region and seed.
+Writes results/episodes.csv with one row per policy, region and seed: the episode metrics, the weights
+used by the weight figure, and a hash of the initial houses, which must be the same for every policy in a
+region and seed. The weights come in two summaries:
+- w_work ... w_damage: the mean over all decision days, i.e. what the policy usually outputs;
+- w_work_contested ...: the mean over the days on which that weight can change who gets workers
+  (env.contested_attributes: free workers short of the candidates' crew caps and the attribute differing
+  among candidates), i.e. how the policy scores under competition; days_work_contested ... count those
+  days and decision_days counts all days.
 """
 import argparse
 import hashlib
+import json
 import os
 import pickle
 from concurrent.futures import ProcessPoolExecutor
@@ -48,6 +54,8 @@ def load_ppo(k):
     from stable_baselines3 import PPO
     torch.set_num_threads(1)
     run = HERE / "runs" / f"seed{k}"
+    if not json.loads((run / "health.json").read_text())["healthy"]:
+        raise RuntimeError(f"{run} failed its final health check (health.json), so it is not evaluated")
     model = PPO.load(run / "final_model.zip", device="cpu",
                      custom_objects={"learning_rate": 0.0, "lr_schedule": lambda _: 0.0})
     with open(run / "vecnormalize.pkl", "rb") as f:
@@ -73,7 +81,6 @@ def run_episode(job, **mechanism):
     Times are in days. Waits and completions start when a house becomes eligible (end of its delay);
     makespan and the mean recovery day count from the earthquake (2018-08-19).
     - holding_cost: sum over houses of priority weight x (completion day - eligible day), divided by N
-    - auc: share of the recovery area (houses x days up to the makespan) that is already recovered
     - mean_wait, pl2_response: eligible -> first workers, all houses and priority-level-2 houses
     - mean_completion, pl2_completion(_p90): eligible -> repaired (mean, and 90th percentile for PL2)
     """
@@ -83,9 +90,10 @@ def run_episode(job, **mechanism):
     env = HouseRecoveryEnv(scenario, **mechanism)
     obs, _ = env.reset(seed=seed)
     buildings = hashlib.sha256(b"".join(a.tobytes() for a in (env.dl, env.pl, env.work, env.arrive, env.elig))).hexdigest()[:16]
-    total_reward, actions, terminated, truncated = 0.0, [], False, False
+    total_reward, actions, contested, terminated, truncated = 0.0, [], [], False, False
     while not (terminated or truncated):
         actions.append(np.clip(act(obs), -1, 1))
+        contested.append(env.contested_attributes())
         obs, reward, terminated, truncated, _ = env.step(actions[-1])
         total_reward += reward
     if truncated:
@@ -94,9 +102,9 @@ def run_episode(job, **mechanism):
     delay = env.done - env.elig           # eligibility -> repair completed
     pl2 = env.pl == 2
     makespan = env.done.max()
+    actions, contested = np.asarray(actions, dtype=np.float64), np.asarray(contested)
     return {"policy": policy, "region": region, "seed": seed,
             "holding_cost": -total_reward,
-            "auc": np.maximum(makespan - env.done, 0).sum() / (env.n * makespan),
             "makespan": makespan,
             "mean_recovery_day": env.done.mean(),    # days after the earthquake, delay included
             "mean_wait": wait.mean(),
@@ -106,7 +114,11 @@ def run_episode(job, **mechanism):
             "pl2_completion_p90": np.quantile(delay[pl2].astype(float), 0.9),
             **{f"completion_{x}": delay[env.dl == k].mean() for k, x in enumerate(["minor", "moderate", "major"])},
             **{k: (np.asarray(w)[getattr(env, attr)] * delay).sum() / env.n for k, (attr, w) in ALT_HC.items()},
-            **dict(zip(WEIGHTS, np.asarray(actions, dtype=np.float64).mean(axis=0))),
+            **dict(zip(WEIGHTS, actions.mean(axis=0))),
+            **{f"{w}_contested": actions[c, j].mean() if c.any() else np.nan
+               for j, (w, c) in enumerate(zip(WEIGHTS, contested.T))},
+            **{f"days_{w[2:]}_contested": int(c.sum()) for w, c in zip(WEIGHTS, contested.T)},
+            "decision_days": len(actions),
             "buildings": buildings}
 
 
@@ -114,6 +126,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     args = ap.parse_args()
+    C.check_calibration()
     jobs = [(p, r, s) for p in POLICIES for r in C.REGIONS for s in SEEDS]
     with ProcessPoolExecutor(args.workers) as pool:
         rows = list(pool.map(run_episode, jobs))

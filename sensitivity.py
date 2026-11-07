@@ -158,6 +158,7 @@ def main():
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     ap.add_argument("--plot-only", action="store_true")
     args = ap.parse_args()
+    C.check_calibration()
     OUT.mkdir(parents=True, exist_ok=True)
     FIG.mkdir(exist_ok=True)
     if not args.plot_only:

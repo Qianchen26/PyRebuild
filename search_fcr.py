@@ -120,6 +120,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     args = ap.parse_args()
+    C.check_calibration()
     OUT.mkdir(parents=True, exist_ok=True)
     search = partial(mean_holding_cost, cases=scenarios(2026104000, [2, 2, 2, 1, 1]))
     confirm = partial(mean_holding_cost, cases=scenarios(2026105000, [8, 8, 8, 4, 4]))

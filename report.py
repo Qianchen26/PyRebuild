@@ -3,7 +3,8 @@
 Usage: python report.py        (a few seconds)
 Writes results/table5.csv (Table 5), results/metrics_table.{csv,md} (every metric with its 95% interval,
 overall and by region), results/metrics_by_region.csv, results/paired.csv (each trained model and the learned policy,
-minus FCR and SJF), figures/training_progress.{pdf,png}, figures/training_signals.png and figures/policy_weights.png.
+minus FCR and SJF), figures/training_progress.{pdf,png}, figures/training_signals.png, figures/policy_weights.png and
+results/learned_weights.csv.
 
 Averaging: within each environment seed the seven regions get equal weight, and the ten seed means are
 then averaged. The 95% t intervals use the ten seed means (9 degrees of freedom). The learned policy is the
@@ -26,7 +27,7 @@ from evaluate import FIXED, WEIGHTS, fcr
 
 HERE = Path(__file__).resolve().parent
 OUT, FIG = HERE / "results", HERE / "figures"
-METRICS = {"holding_cost": "HC", "auc": "AUC", "makespan": "Makespan", "mean_recovery_day": "Mean recovery day",
+METRICS = {"holding_cost": "HC", "makespan": "Makespan", "mean_recovery_day": "Mean recovery day",
            "mean_wait": "Mean wait",
            "mean_completion": "Mean completion", "pl2_response": "PL2 RT", "pl2_completion": "PL2 completion",
            "pl2_completion_p90": "PL2 completion P90", "completion_minor": "Completion minor",
@@ -59,8 +60,7 @@ def tables(df):
     by_region.to_csv(OUT / "metrics_by_region.csv", index=False)
     with open(OUT / "metrics_table.md", "w") as f:
         f.write("# Evaluation metrics (7 regions x seeds 1000-1009; mean [95% CI over seed blocks])\n\n")
-        f.write("Units: HC = priority-weighted building-days per building; AUC = share of the recovery area left "
-                "unrecovered; times in days.\n\n" + cells.to_markdown() + "\n\n")
+        f.write("Units: HC = priority-weighted building-days per building; times in days.\n\n" + cells.to_markdown() + "\n\n")
         for col in ["HC", "Mean wait", "PL2 RT", "Makespan"]:
             f.write(f"## {col} by region\n\n" + by_region.pivot(index="policy", columns="region", values=col)
                     .loc[order].round(3).to_markdown() + "\n\n")
@@ -147,44 +147,55 @@ def training_signals():
 
 
 def weight_comparison(df):
-    """Episode-mean weights of the learned policy (5-model mean and each model) next to SJF and FCR."""
-    model_means = np.array([df[df.policy == k][WEIGHTS].mean().to_numpy() for k in PPO])
-    learned = model_means.mean(axis=0)
-    print("\nModel mean weights [work, wait, priority, damage]:\n" + np.array2string(model_means, precision=3))
-    weights = np.array([FIXED["SJF"], fcr(), learned], dtype=float)
+    """Weights of the learned policy next to SJF and FCR, in two panels: (a) the mean over all decision days,
+    i.e. what the models usually output; (b) the mean over contested days, when that weight can change who
+    gets workers (evaluate.py, env.contested_attributes), i.e. how the models score under competition.
+    Each model's value averages its 70 episode means; the bar is the mean of the five models.
+    Writes results/learned_weights.csv with both means and the share of contested days per model."""
+    panels = {"all": WEIGHTS, "contested": [f"{w}_contested" for w in WEIGHTS]}
+    ppo = df[df.policy.isin(PPO)].groupby("policy")
+    table = pd.concat({k: ppo[cols].mean().set_axis(WEIGHTS, axis=1) for k, cols in panels.items()}, axis=1)
+    days = ppo[[f"days_{w[2:]}_contested" for w in WEIGHTS]].sum()
+    table = table.join(pd.concat({"contested share": days.div(ppo.decision_days.sum(), axis=0).set_axis(WEIGHTS, axis=1)}, axis=1))
+    table.to_csv(OUT / "learned_weights.csv")
+    print("\nLearned weights [work, wait, priority, damage]: all days, contested days, contested share\n"
+          + table.round(3).to_string())
     names, colors = ["SJF", "FCR", "Learned policy"], ["#D9D9D9", "#969696", "#404040"]
     labels = ["Repair work", "Days since\neligibility", "Social priority", "Damage level"]
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 14, "axes.spines.top": False,
                          "axes.spines.right": False, "axes.spines.left": False, "axes.linewidth": .7,
                          "savefig.facecolor": "white"})
-    fig, ax = plt.subplots(figsize=(8, 5.8))
-    fig.subplots_adjust(left=.30, right=.975, bottom=.14, top=.84)
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.8), sharey=True)
+    fig.subplots_adjust(left=.17, right=.985, bottom=.14, top=.80, wspace=.08)
     groups, offsets = np.arange(4), [-.27, 0., .27]
-    ax.axvline(0, color="black", linewidth=1., zorder=2)
-    for values, offset, color in zip(weights, offsets, colors):
-        ax.barh(groups + offset, values, height=.22, color=color, edgecolor="#303030", linewidth=.55, zorder=3)
-    for k, offset in enumerate(np.linspace(-.10, .10, 5)):
-        ax.scatter(model_means[k], groups + offsets[2] + offset, s=12, facecolor="white",
-                   edgecolor="black", linewidth=.7, zorder=6)
-    for boundary in np.arange(.5, 3.5):
-        ax.axhline(boundary, color="#E5E5E5", linewidth=.65, zorder=0)
-    ax.set_yticks(groups, labels, fontsize=13.5)
-    ax.tick_params(axis="y", length=0, pad=14)
-    ax.set_ylim(3.57, -.57)
-    ax.set_xlim(-1.12, 1.12)
-    ax.set_xticks([-1., -.5, 0., .5, 1.], ["\u22121.0", "\u22120.5", "0", "0.5", "1.0"])
-    ax.tick_params(axis="x", labelsize=13)
-    ax.set_xlabel("Dispatching weight (attributes min-max scaled among candidates)", labelpad=11, fontsize=12)
-    ax.grid(axis="x", color="#EEEEEE", linewidth=.6)
-    ax.set_axisbelow(True)
+    for ax, (key, title) in zip(axes, [("all", "(a) All decision days"), ("contested", "(b) Contested days")]):
+        model_means = table[key].loc[PPO].to_numpy()
+        weights = np.array([FIXED["SJF"], fcr(), model_means.mean(axis=0)], dtype=float)
+        ax.axvline(0, color="black", linewidth=1., zorder=2)
+        for values, offset, color in zip(weights, offsets, colors):
+            ax.barh(groups + offset, values, height=.22, color=color, edgecolor="#303030", linewidth=.55, zorder=3)
+        for k, offset in enumerate(np.linspace(-.10, .10, 5)):
+            ax.scatter(model_means[k], groups + offsets[2] + offset, s=12, facecolor="white",
+                       edgecolor="black", linewidth=.7, zorder=6)
+        for boundary in np.arange(.5, 3.5):
+            ax.axhline(boundary, color="#E5E5E5", linewidth=.65, zorder=0)
+        ax.set_title(title, fontsize=14, loc="left")
+        ax.set_yticks(groups, labels, fontsize=13.5)
+        ax.tick_params(axis="y", length=0, pad=14)
+        ax.set_ylim(3.57, -.57)
+        ax.set_xlim(-1.12, 1.12)
+        ax.set_xticks([-1., -.5, 0., .5, 1.], ["\u22121.0", "\u22120.5", "0", "0.5", "1.0"])
+        ax.tick_params(axis="x", labelsize=13)
+        ax.grid(axis="x", color="#EEEEEE", linewidth=.6)
+        ax.set_axisbelow(True)
+    fig.supxlabel("Dispatching weight (attributes min-max scaled among candidates)", y=.02, fontsize=12)
     fig.legend([Patch(facecolor=c, edgecolor="#303030", linewidth=.55) for c in colors], names,
-               ncol=3, frameon=False, loc="upper center", bbox_to_anchor=(.6, .99), fontsize=12.5)
+               ncol=3, frameon=False, loc="upper center", bbox_to_anchor=(.58, .995), fontsize=12.5)
     fig.legend([Line2D([], [], marker="o", markersize=4, markerfacecolor="white", markeredgecolor="black",
                        linestyle="none")], ["Learned-policy points: one mean per training seed"],
-               frameon=False, loc="upper center", bbox_to_anchor=(.6, .93), fontsize=11.5)
+               frameon=False, loc="upper center", bbox_to_anchor=(.58, .935), fontsize=11.5)
     fig.savefig(FIG / "policy_weights.png", dpi=300)
     plt.close(fig)
-
 
 if __name__ == "__main__":
     FIG.mkdir(exist_ok=True)

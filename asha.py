@@ -8,7 +8,7 @@ from scratch on the seed's own scenario pool. Trials are ranked by the probe hol
 their rung, trials with a red flag after those without. A trial folder that already
 holds a final model is scored again instead of retrained, so an interrupted search can resume.
 The full-budget winner goes through the regular 20% check and final health; if it passes, it is copied
-to runs/seedK, and if it fails, asha.py reports the failure and leaves runs/seedK unchanged. Writes runs/asha/seedK/{trials.csv, best.json} and one folder per trial.
+to runs/seedK; if it fails either, asha.py leaves runs/seedK unchanged and exits with an error. Writes runs/asha/seedK/{trials.csv, best.json} and one folder per trial.
 """
 import argparse
 import json
@@ -76,15 +76,18 @@ def main():
     rows.append({**final, "config": alive[0]})
     pd.DataFrame(rows).to_csv(root / "trials.csv", index=False)
     run = root / f"r2_{alive[0]}"
-    if final["exit"] != 0 or not (run / "final_model.zip").exists():
-        raise SystemExit(f"seed {args.seed}: the tuned run raised red flags again: {final['red_flags']}")
-    health = final_health(run)
-    print(f"seed {args.seed}: tuned run healthy={health['healthy']} {health['flags']}", flush=True)
-    if health["healthy"]:
-        target = HERE / "runs" / f"seed{args.seed}"
-        if target.exists():
-            shutil.move(target, root / "failed_default_run")
-        shutil.copytree(run, target)
+    if final["exit"] != 0 or not (run / "final_model.zip").exists():   # 3: red flag at 20%, 4: final health
+        raise SystemExit(f"seed {args.seed}: the tuned run failed (train.py exit {final['exit']}); "
+                         f"runs/seed{args.seed} is unchanged")
+    health = final_health(run)   # needed too when the trial folder was reused and train.py did not run
+    if not health["healthy"]:
+        raise SystemExit(f"seed {args.seed}: the tuned run failed the final health check {health['flags']}; "
+                         f"runs/seed{args.seed} is unchanged")
+    print(f"seed {args.seed}: tuned run healthy", flush=True)
+    target = HERE / "runs" / f"seed{args.seed}"
+    if target.exists():
+        shutil.move(target, root / "failed_default_run")
+    shutil.copytree(run, target)
 
 
 if __name__ == "__main__":

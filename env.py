@@ -164,7 +164,7 @@ class HouseRecoveryEnv(gym.Env):
         # Then candidates, in descending score.
         cand = np.flatnonzero(self.eligible & (self.start < 0))
         if free > 0 and len(cand):
-            x = np.column_stack([self.work[cand], self.day - self.elig[cand], self.pl[cand], self.dl[cand]])
+            x = self._attributes(cand)
             lo, span = x.min(axis=0), np.ptp(x, axis=0)
             score = ((x - lo) / np.where(span > 0, span, 1.0)) @ weights
             # At most `free` candidates can start today, so sorting only those (plus every candidate
@@ -181,6 +181,25 @@ class HouseRecoveryEnv(gym.Env):
             self.active = np.union1d(self.active, started)
             free -= give.sum()
         self.free = free
+
+    def _attributes(self, cand):
+        """The four raw ranking attributes of the candidates: repair work, days since eligibility, priority, damage."""
+        return np.column_stack([self.work[cand], self.day - self.elig[cand], self.pl[cand], self.dl[cand]])
+
+    def contested_attributes(self):
+        """Which of today's four weights can change who gets workers (read-only; call before step).
+
+        A weight matters only on a contested day: after short crews are filled, some free present workers
+        remain but fewer than the crew caps of all candidates, and at least two candidates compete. On
+        other days every weight vector gives the same dispatch. On a contested day, the weight of an
+        attribute that is equal for all candidates still has no effect (it is scaled to 0).
+        """
+        a = self.active
+        free = self.free - (self.cap[a] - self.crew[a]).sum()
+        cand = np.flatnonzero(self.eligible & (self.start < 0))
+        if free <= 0 or len(cand) < 2 or free >= self.cap[cand].sum():
+            return np.zeros(4, dtype=bool)
+        return np.ptp(self._attributes(cand), axis=0) > 0
 
     @staticmethod
     def _fill(free, demand):

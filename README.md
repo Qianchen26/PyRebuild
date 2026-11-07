@@ -56,10 +56,14 @@ Times in the table below are for a 14-core laptop; `OMP_NUM_THREADS=1` keeps the
 | 2. Train five PPO models | `bash run_training.sh` | 25 min | `runs/seed0`–`seed4` |
 | 3. Search the FCR | `OMP_NUM_THREADS=1 python search_fcr.py` | 20 min | `results/fcr_search/` |
 | 4. Evaluate all policies | `OMP_NUM_THREADS=1 python evaluate.py` | 1 min | `results/episodes.csv` |
-| 5. Tables and figures | `python report.py` | 10 s | `results/table5.csv`, `results/metrics_table.md`, `results/paired.csv`, `figures/` |
+| 5. Tables and figures | `python report.py` | 10 s | `results/table5.csv`, `results/metrics_table.md`, `results/paired.csv`, `results/learned_weights.csv`, `figures/` |
 | 6. Sensitivity analysis | `OMP_NUM_THREADS=1 python sensitivity.py` | 1 h | `results/sensitivity/`, `figures/sensitivity_*.png` |
 
 Steps 2 and 3 are independent and can run at the same time. In step 2, a seed whose training raises a red flag at 20% (see `health.py`) is tuned automatically with `asha.py`.
+
+Training, FCR search, evaluation and sensitivity analysis check that `config.py` agrees with `results/calibration/best.json`. If a new calibration selects different values, update `config.py` before running these steps. Training exits with an error when its final health check fails; ASHA also checks reused trial models before adopting them, and evaluation requires a successful `health.json` verdict.
+
+The weight figure and `results/learned_weights.csv` report two summaries: means over all decision days and means over days with competition for workers and variation in the corresponding candidate attribute. The first describes the policy's usual outputs; the second describes its scoring weights under competition. Each model's value averages its 70 episode means. These summaries describe coefficients; actual rankings and allocations determine their effect on recovery outcomes.
 
 ## Repository structure
 

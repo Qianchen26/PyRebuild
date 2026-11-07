@@ -4,6 +4,8 @@ Every simulator input used by the other scripts is defined here once. Sources ar
 value. The mechanism values without a source (absence rate, progress noise, holding-cost weights) are design
 choices that the sensitivity analysis (sensitivity.py) varies.
 """
+import json
+from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
@@ -53,6 +55,19 @@ MECHANISM = dict(
     delay_sigma=0.3,                               # (Alisjahbana & Kiremidjian 2021, Table 4)
 )
 MAX_DAYS = 5000                                  # stops an episode that would never end; never reached
+
+
+def check_calibration():
+    """Stop unless results/calibration/best.json (written by calibrate.py) holds the alpha, crew caps and
+    batches used here, e.g. after calibrate.py was rerun with another pick. Called by train.py,
+    search_fcr.py, evaluate.py and sensitivity.py."""
+    best = json.loads((Path(__file__).resolve().parent / "results" / "calibration" / "best.json").read_text())
+    found = (best["alpha"], (best["c_minor"], best["c_moderate"], best["c_major"]), tuple(map(tuple, best["batches"])))
+    used = (ALPHA, tuple(MECHANISM["max_crew"].tolist()), BATCHES)
+    if found != used:
+        raise SystemExit(f"config.py (alpha, crew caps, batches) = {used} but results/calibration/best.json "
+                         f"has {found}: update config.py to the calibration in use")
+
 
 # Synthetic scenarios for PPO training and the FCR search: damage shares and how many of the 200 per pool.
 SCENARIO_TYPES = {

@@ -29,10 +29,11 @@ KL, KL_RUN, STD, ENTROPY_TOL = 0.2, 3, (0.05, 5.0), 1.05
 
 
 def load(run):
-    """The rows of progress.csv that follow a PPO update (the first row is logged before any update)."""
+    """The rows of progress.csv that follow a PPO update. The first row is logged before any update and has
+    no update count; later rows are kept even if a metric is NaN, so that R1 sees it."""
     path = run / "progress.csv"
     df = pd.read_csv(path) if path.stat().st_size else pd.DataFrame()
-    return df[df["train/approx_kl"].notna()].reset_index(drop=True) if "train/approx_kl" in df else df
+    return df[df["train/n_updates"].notna()].reset_index(drop=True) if "train/n_updates" in df else df
 
 
 def _common(df):
@@ -143,6 +144,10 @@ def callback(run, total, probes, stop=True):
 
         def _on_training_end(self):   # after the last update, i.e. the saved model
             self._probe()
+            # Stable-Baselines3 writes the logs before each update, so the metrics of the last update
+            # are still unwritten here; write them so that progress.csv covers the saved model.
+            self.logger.record("time/total_timesteps", self.num_timesteps)
+            self.logger.dump(self.num_timesteps)
 
         def _on_step(self):
             return not (stop and self.red_flags)
