@@ -1,0 +1,20 @@
+{
+  "n_steps": 1024,
+  "batch_size": 128,
+  "n_epochs": 5,
+  "gae_lambda": 0.9,
+  "clip_range": 0.2,
+  "ent_coef": 0.001,
+  "net_arch": [
+    256,
+    256
+  ],
+  "gamma": 0.99,
+  "lr_start": 0.0005174327057823035,
+  "seed": 3,
+  "total_timesteps": 1000000,
+  "n_envs": 8,
+  "hparams": null,
+  "run": null,
+  "no_stop": false
+}
